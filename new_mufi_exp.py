@@ -10,7 +10,7 @@ from multiprocessing import Pool
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import json
-# import pandas as pd
+import pandas as pd
 
 def linearFunc(x,intercept,slope):
     y = intercept + slope * x
@@ -194,6 +194,8 @@ def smallSiPMchannel(i):
     if i==2 or i==5 or i==10 or i==13: return True
     else: return False
 
+def largeSiPMchannel(i):
+    return not smallSiPMchannel(i)
 def fit_langau(hist,o,bmin,bmax,opt=''):
    if opt == 2:
      params = {0:'Width(scale)',1:'mostProbable',2:'norm',3:'sigma',4:'N2'}
@@ -1105,13 +1107,23 @@ def beamSpot():
          if not Ybar<0 and not Xbar<0 and abs(slopeY)<0.01: rc = h['bsDS'].Fill(Xbar,Ybar)
 
 
+def find_max_bin(hist, range_min, range_max):
+   max_bin = 0
+   max_bin_content = 0
+   for i in range(range_min, range_max+1):
+      bin_content = hist.GetBinContent(i)
+      if bin_content >= max_bin_content:
+         max_bin_content = bin_content
+         max_bin = hist.GetBinCenter(i)
+      return max_bin
 
 
-def draw_qdc_sipm(hist_list_sipm, label, write_sipm = False):
+def draw_qdc_sipm(hist_list_sipm, label, wall_num, write_sipm = False):
    mpv_sipms = []
+   end_points = []
    sipmID = []
    k_sipm = 0
-   with open("sipm_mpvs", "w") as f:
+   with open(f"sipm_endpoints_{wall_num}wall", "w") as f:
       for pl in hist_list_sipm:
          for br in hist_list_sipm[pl]:
             c  = ROOT.TCanvas(f"{label}. Bar {pl*10 + br}", f"{label}. Bar {pl*10 + br}",0,0,1000,1000)
@@ -1123,8 +1135,78 @@ def draw_qdc_sipm(hist_list_sipm, label, write_sipm = False):
                   sipmID.append(k_sipm)
                   mpv_sipms.append(res)
                   print(pl*10 + br, Si, k_sipm, res, file = f)
-               hist_list_sipm[pl][br][Si].Draw()          
+                  
+               #fit_function = ROOT.TF1("fit_function_1n", "gaus", 100, 200)
+
+               # # Fit the histogram with the Gaussian function
+               #hist_list_sipm[pl][br][Si].Fit("fit_function_1n")
+               #fit_parameters = fit_function.GetParameters()
+               mean = 0
+               sigma = 0
+               n_init = 10
+               last_nonzero_bin = hist_list_sipm[pl][br][Si].FindLastBinAbove(0) 
+               print([hist_list_sipm[pl][br][Si].GetBinContent(last_nonzero_bin-i) for i in range(n_init)])
+               list_down = [hist_list_sipm[pl][br][Si].GetBinContent(last_nonzero_bin-i) for i in range(n_init)]
+               # while sum(list_down) < 10 and n_init < 15:
+               list_up = [hist_list_sipm[pl][br][Si].GetBinCenter(last_nonzero_bin-i)*hist_list_sipm[pl][br][Si].GetBinContent(last_nonzero_bin-i) for i in range(10)]
+               try:
+                  last_bin_value = sum(list_up)/sum(list_down)
+                              # Set the range for the search
+               except:
+                  last_bin_value = -999
+               max_bin = find_max_bin(hist_list_sipm[pl][br][Si], 100, 200)
+               sipmID.append(k_sipm)
+               end_points.append(last_bin_value)
+               print(pl*10 + br, Si, k_sipm, last_bin_value, max_bin,  mean, sigma, file = f)
+               hist_list_sipm[pl][br][Si].Draw()   
+               k_sipm += 1       
             c.Write()
+
+def draw_pcb(hist_pcb, label, write_sipm = False):
+   mpv_sipms = []
+   sipmID = []
+   k_sipm = 0
+   pl = 4
+   with open("sipm_mpvs", "w") as f:
+      c  = ROOT.TCanvas(f"{label}. Plane {pl}. PCB", f"{label}. Plane {pl}. PCB",0,0,2000,2000)
+      c.Divide(6,10)
+      k = 0
+      for br in range(10):
+         for i, Si in enumerate(hist_pcb[br]):
+            c.cd(k+1)
+            k += 1
+            hist_pcb[br][Si].Draw()          
+      c.Write()
+
+def draw_pcb_1(hist_pcb, label, write_sipm = False):
+    # Create a canvas
+    pl = 4
+    canvas  = ROOT.TCanvas(f"{label}. Plane {pl}. PCB", f"{label}. Plane {pl}. PCB",0,0,2000,2000)
+
+    # Define the number of rows and columns
+    rows = 10
+    columns = 6
+
+    # Calculate the width and height of each pad
+    pad_width = 1.0 / columns
+    pad_height = 1.0 / rows
+    large_sipms = [i for i in filter(largeSiPMchannel, range(16))]
+    # Create pads and arrange them in rows and columns
+    for i_row in range(rows):
+        for i_col in range(columns):
+            # Calculate the pad coordinates
+            x1 = i_col * pad_width
+            y1 = 1.0 - (i_row + 1) * pad_height
+            x2 = (i_col + 1) * pad_width
+            y2 = 1.0 - i_row * pad_height
+
+            # Create a pad and draw it
+            pad = ROOT.TPad("pad_{0}_{1}".format(i_row, i_col), "", x1, y1, x2, y2)
+            pad.Draw()
+            # Draw the histogram on the pad
+            pad.cd()
+            hist_pcb[i_row][large_sipms[i_col]].Draw()
+    canvas.Write()
 
 def draw_qdc_bar(hist_list_bar, label, fit_key = False):
    for pl in hist_list_bar:
@@ -1242,8 +1324,9 @@ def track_reco_tool():
       slopeY= mom.Y()/mom.Z()
       return True
 
+from pathlib import Path
 
-def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_mech = "dir", side_bar_key = False, mc = False, muon = True, small_count = False, large_count = False, fill_sipm_key = False, offset = 0., write_data = False):
+def MIP_study(Nev_st = 0, Nev_en = 1, list_of_events_key = False, title = "default", label_0 = "def", conv_mech = "dir", side_bar_key = False, mc = False, muon = True, small_count = False, large_count = False, fill_sipm_key = False, offset = 0., write_data = False):
 
  # veto system 2 layers with 7 bars and 8 sipm channels on both ends
  # US system 5 layers with 10 bars and 8 sipm channels on both ends
@@ -1251,17 +1334,28 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
  #                         vertical(4) planes, 60 bar, readout on top, single channel
  
 
-
-
+ wall_num = -999
+ if list_of_events_key:
+   wall_num = 3
+   file_path = "/eos/user/u/ursovsnd/SWAN_projects/tests"
+   file_list = list(map(str, Path().glob(f"./from_condor/{options.runNumber}_cal/*/*")))
+   df_list = []
+   for file in file_list:
+      df_list.append(pd.read_csv(file))
+   df = pd.concat(df_list)
+   event_list = df.query(f"wall == {wall_num}")["event"].to_numpy()
+ else:
+   event_list = range(Nev_st, Nev_en)
 
 
  bin_min = -10
- bin_max = 200
+ bin_max = 250
  label = "[#sqrt{QDC_L #times QDC_R}]"
  label_sipm = "[QDC]"
  hist_list = {l: ROOT.TH1I("plane" + f"_{l}", "plane" + f"_{l}; {label};", 200, bin_min, bin_max) for l in range(20, 25)}
  hist_list_bar = {l: {bar: ROOT.TH1I("plane" + f"_{l}_{bar}", "plane" + f"_{l}_{bar}; {label};", 200, bin_min, bin_max) for bar in range(10)} for l in range(20, 25)}
  hist_list_sipm = {l: {bar: {sipm: ROOT.TH1I("plane" + f"_{l}_{bar}_{sipm}", "plane" + f"_{l}_{bar}_{sipm}; {label_sipm};", 200, bin_min, bin_max) for sipm in range(16)} for bar in range(10)} for l in range(20, 25)}
+ l_us4_lausanne_check_hist = {bar: {sipm: ROOT.TH1I("PCB. " + f"{bar}_{sipm}", "PCB. " + f"_{bar}_{sipm}; {label_sipm};", 200, bin_min, bin_max) for sipm in filter(largeSiPMchannel, range(8))} for bar in range(10)}
  h_qdc_hit = ROOT.TH2I("qdc_vs_hit","QDC vs. Number of fired bars;Number of fired bars;QDC", 100,0,50.,100,0,200)
  h_qdc_hit_norm = ROOT.TH2I("qdc_vs_hit_norm","#sum QDC/Ntot vs. Number of fired bars;Number of fired bars; #sum QDC/Ntot", 100,0,50.,100,0,25)
  hist_usshower = ROOT.TH2I("US Shower", "US Shower; Plane; Bar", 5, -0.5, 4.5, 10, -0.5, 9.5)
@@ -1336,7 +1430,9 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
       slope_info = pd.DataFrame(json.load(read_content))
       slope_info.columns = ["bar_id", "slopes", "slopes_err", "ch_small", "ch_other"]
 #  print(slope_info)
- for N in range(Nev_st, Nev_en + 1):
+
+ l_us4_integrated_lausanne_check = {i: {} for i in range(10)}
+ for N in map(int, event_list):
 #  for event in eventTree:
    #  N+=1
     eventTree.GetEvent(N)
@@ -1376,6 +1472,7 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
     all_signal_num = {}
     negative_signal_num = {}
     us_shower = {}
+    l_us4_per_event_lausanne_check = {i: {} for i in range(10)}
     for hit_number, aHit in enumerate(eventTree.Digi_MuFilterHits):
       #   if not aHit.isValid(): continue
         detID = aHit.GetDetectorID()
@@ -1446,6 +1543,7 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
         l_vs_r_hist_left_small_list = [] #
         l_vs_r_hist_right_large_list = [] # 
         l_vs_r_hist_left_large_list = [] #
+        l_us4_lausanne_check = {i: {} for i in range(10)}
       
         large_firing = 0
         for Si in allChannels:
@@ -1494,7 +1592,7 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
                         # print(allChannels)
                   else:
                      continue
-        print(N, s*100 + l*10 + bar, hit_number, allChannels)
+      #   print(N, s*100 + l*10 + bar, hit_number, allChannels)
         if l not in all_signal_num:
            all_signal_num[l] = {}
            negative_signal_num[l] = {}
@@ -1532,6 +1630,15 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
                else:
                   l_vs_r_hist_left_large_list.append(qdc_1)
                   l_vs_r_list_left.append(qdc_1)
+                  if l == 3:
+                     l_us4_lausanne_check[bar][Si] = qdc_1
+                     if Si not in l_us4_per_event_lausanne_check[bar]:
+                        l_us4_per_event_lausanne_check[bar][Si] = [qdc_1]
+                        l_us4_integrated_lausanne_check[bar][Si] = [qdc_1]
+                     else:
+                        l_us4_per_event_lausanne_check[bar][Si].append(qdc_1)
+                        l_us4_integrated_lausanne_check[bar][Si].append(qdc_1)
+                     l_us4_lausanne_check_hist[bar][Si].Fill(qdc_1)
             hist_list_sipm[s*10 + l][bar][Si].Fill(qdc_1)
         l_vs_s_hist[s*10 + l][bar].Fill(np.array(large_list).mean(), np.array(small_list).mean())
         l_vs_r_hist[s*10 + l][bar].Fill(np.array(l_vs_r_list_right).mean(), np.array(l_vs_r_list_left).mean())
@@ -1579,6 +1686,10 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
         number_of_hits += 1
         #print(N, qdc_value)
         us_shower[l][bar] += qdc_value
+        
+        
+        
+        
     if number_of_hits > 0:
       h_qdc_hit.Fill(number_of_hits, qdc_per_event)
       h_qdc_hit_norm.Fill(number_of_hits, qdc_per_event/(number_of_hits))
@@ -1683,7 +1794,8 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
  
  
  File = ROOT.TFile.Open(f"{'muon' if muon else 'pion'}_{title}_{options.runNumber}{label}.root", "RECREATE")
- draw_qdc_sipm(hist_list_sipm, "US QDC distribution")
+ draw_qdc_sipm(hist_list_sipm, "US QDC distribution", wall_num)
+ draw_pcb(l_us4_lausanne_check_hist, "PCB US4L")
  draw_qdc_bar(hist_list_bar, "US QDC distribution")
  draw_qdc_bar(l_vs_s_hist, "Large vs Small")
  draw_qdc_bar(l_vs_s_hist_right, "Large vs Small. Right")
@@ -1703,19 +1815,21 @@ def MIP_study(Nev_st = 0, Nev_en = 1, title = "default", label_0 = "def", conv_m
  draw_scifi_dist(File, hist_scifi_hit, "hit_distribution")
  draw_scifi_dist(File, hist_scifi_qdc, "qdc_distribution")
  File.Close()
+#  File = ROOT.TFile.Open(f"{options.runNumber}_sipm_hists.root", "RECREATE") 
+#  draw_scifi_dist(File, hist_scifi_qdc, "qdc_distribution")
  print(f"Data of {options.runNumber} run has been stored in {'muon' if muon else 'pion'}_{title}_{options.runNumber}{label}.root")
  print(f"Negative singals: {negative_signal}")
 
 def run_energy(run):
-   if run == 100631:
+   if run == 100631 or run == 100677:
       return 100
-   if run == 100633:
+   if run == 100633 or run == 100673:
       return 140
-   if run == 100648:
+   if run == 100648 or run == 100646:
       return 240
    if run == 100636:
       return 180
-   if run == 100643:
+   if run == 100643 or run == 100645:
       return 300
 import pickle
 
@@ -1737,11 +1851,95 @@ def signal_relation_digi_hists(signal_hit_scifi, event_info, energy):
    #  ax[1].hist(signal_hit_us["signal_us_hit"], bins = 100, histtype = "step")
     fig.savefig(f"signal_hists_hit_{energy}.pdf")    
 
-def gen_events_scifi(Nev_st, Nev_en, save = True):
+
+
+def def_tagging(Digi_ScifiHits, TY, Nsf_hits, SFqdcStation, Nsf_itofpet, signal_hit_scifi, N, file_info):
+      for aHit in Digi_ScifiHits:        
+         if (aHit.GetTime(0) - TY) < 0. or (aHit.GetTime(0) - TY) > 1.: continue
+         Nsf_hits[aHit.GetStation()] += 1
+         SFqdcStation[aHit.GetStation()] += aHit.GetSignal()
+         X1 = (64*aHit.GetTofpetID(0)+63-aHit.Getchannel(0))*0.025
+         Y1 = (64*aHit.GetTofpetID(0)+63-aHit.Getchannel(0))*0.025
+         if aHit.isVertical():
+               #if aHit.GetTofpetID(0) == 3:
+                  #print("vertical: ", aHit.GetTofpetID(0), "station: ", aHit.GetStation(), "X,Y: ", X1, Y1)
+               Nsf_itofpet[0][aHit.GetTofpetID(0)][aHit.GetStation()] += 1
+
+         else:
+               #if aHit.GetTofpetID(0) == 3:
+                  #print("horizontal: ", aHit.GetTofpetID(0), "station: ", aHit.GetStation(), "X,Y: ", X1, Y1)
+               Nsf_itofpet[1][aHit.GetTofpetID(0)][aHit.GetStation()] += 1
+         signal_hit_scifi["signal_scifi_hit"].append(aHit.GetSignal())
+         signal_hit_scifi["event_number"].append(N)
+ 
+      Iwall = 0
+      for t in range(4):
+         if Iwall != 0: break
+         Ishower=0
+         NhitPerTofpetShowerId = 0
+         for q in range(8):
+            if Nsf_itofpet[0][q][t+1] > 35:
+               NhitPerTofpetShowerId = Nsf_itofpet[0][q][t+1]
+               Ishower = 1
+
+         if Ishower == 1:
+               for q in range(8):
+                  if Nsf_itofpet[1][q][t+1] > 35:
+                        Ishower=2
+                        Iwall = t
+      signal_sum = 0
+      hit_sum = 0       
+      for station in SFqdcStation:
+         signal_sum += SFqdcStation[station]
+         hit_sum += Nsf_hits[station]
+         if f"scifi_{station}_hits" not in file_info:
+            file_info[f"scifi_{station}_hits"] = [Nsf_hits[station]]    
+            file_info[f"scifi_{station}_qdc"] = [SFqdcStation[station]]
+         else:
+            file_info[f"scifi_{station}_hits"].append(Nsf_hits[station])  
+            file_info[f"scifi_{station}_qdc"].append(SFqdcStation[station])   
+            
+      file_info["energy"].append(run_energy(options.runNumber))
+      file_info["event"].append(N)
+      file_info["wall"].append(Iwall)
+      file_info["scifi_signal"].append(signal_sum)
+      file_info["scifi_hit"].append(hit_sum) 
+        
+def second_tagging(Digi_ScifiHits, TY, Nsf_hits, SFqdcStation, Nsf_itofpet, signal_hit_scifi, N, file_info, F = 0.10):
+
+   for aHit in Digi_ScifiHits: 
+      if (aHit.GetTime(0) - TY) < 0. or (aHit.GetTime(0) - TY) > 1.: continue
+      Nsf_hits[aHit.GetStation()] += 1
+      SFqdcStation[aHit.GetStation()] += aHit.GetSignal()
+   Iwall = 0
+   for st in [1,2,3]:
+      if Iwall != 0: break
+      #if Nsf_hits[st]/(Nsf_hits[st] + Nsf_hits[st+1]) < F:
+      if Nsf_hits[st+1] > (1/F - 1)*Nsf_hits[st] and Nsf_hits[st+1] > 15:
+            Iwall = st
+
+   signal_sum = 0
+   hit_sum = 0       
+   for station in SFqdcStation:
+      signal_sum += SFqdcStation[station]
+      hit_sum += Nsf_hits[station]
+      if f"scifi_{station}_hits" not in file_info:
+         file_info[f"scifi_{station}_hits"] = [Nsf_hits[station]]    
+         file_info[f"scifi_{station}_qdc"] = [SFqdcStation[station]]
+      else:
+         file_info[f"scifi_{station}_hits"].append(Nsf_hits[station])  
+         file_info[f"scifi_{station}_qdc"].append(SFqdcStation[station])   
+         
+   file_info["energy"].append(run_energy(options.runNumber))
+   file_info["event"].append(N)
+   file_info["wall"].append(Iwall)
+   file_info["scifi_signal"].append(signal_sum)
+   file_info["scifi_hit"].append(hit_sum) 
+def gen_events_scifi(Nev_st, Nev_en, save = True, condor = False):
  print(Nev_st, Nev_en)
  file_info = {"energy": [], "event": [], "wall": [], "scifi_signal": [], "scifi_hit": [], "us_signal": [], "us_hit": [], "sat_sipms": [], "notsat_sipms": [], "ds_vert_signal": [], "ds_vert_hit": [], "ds_hor_signal": [], "ds_hor_hit": []}
  signal_hit_scifi = {"event_number": [], "signal_scifi_hit": []}
- with open(f'/eos/user/u/ursovsnd/SWAN_projects/tests/scifi_events_bar_level_{options.runNumber}.pkl', 'wb') as f:  # open a text file
+ with open(f'/eos/user/u/ursovsnd/SWAN_projects/tests/scifi_events_bar_level_{options.runNumber}_first_alg_35_1-1.pkl', 'wb') as f:  # open a text file
    good = 0
    for N in range(Nev_st, Nev_en + 1):
    #  for event in eventTree:
@@ -1786,37 +1984,9 @@ def gen_events_scifi(Nev_st, Nev_en, save = True):
       if np.abs(TX - TY) > 1:
          continue
       # print("CHECK_2!!!")            
-      for aHit in eventTree.Digi_ScifiHits:        
-         if (aHit.GetTime(0) - TY) < 0. or (aHit.GetTime(0) - TY) > 1.: continue
-         Nsf_hits[aHit.GetStation()] += 1
-         SFqdcStation[aHit.GetStation()] += aHit.GetSignal()
-         if aHit.isVertical():
-               # print("vertical: ", aHit.GetTofpetID(0))
-               Nsf_itofpet[0][aHit.GetTofpetID(0)][aHit.GetStation()] += 1
+      def_tagging(eventTree.Digi_ScifiHits, TY, Nsf_hits, SFqdcStation, Nsf_itofpet, signal_hit_scifi, N, file_info)
+      #second_tagging(eventTree.Digi_ScifiHits, TY, Nsf_hits, SFqdcStation, Nsf_itofpet, signal_hit_scifi, N, file_info)
 
-         else:
-               # print("horizontal: ", aHit.GetTofpetID(0))
-               Nsf_itofpet[1][aHit.GetTofpetID(0)][aHit.GetStation()] += 1
-
-
-         signal_hit_scifi["signal_scifi_hit"].append(aHit.GetSignal())
-         signal_hit_scifi["event_number"].append(N)
-      Iwall = 0
-      for t in range(4):
-         if Iwall != 0: break
-         Ishower=0
-         NhitPerTofpetShowerId = 0
-         for q in range(8):
-            if Nsf_itofpet[0][q][t+1] > 30:
-               NhitPerTofpetShowerId = Nsf_itofpet[0][q][t+1]
-               Ishower = 1
-
-         if Ishower == 1:
-               for q in range(8):
-                  if Nsf_itofpet[1][q][t+1] > 30:
-                        Ishower=2
-                        Iwall = t
-      print(Iwall, SFqdcStation)
       # if (Iwall == 0): continue
       ######### 
       num_of_sipms_sat = 0  
@@ -1877,26 +2047,10 @@ def gen_events_scifi(Nev_st, Nev_en, save = True):
                file_info[f"us_{l}_{bar}_qdc"].append(Nusbars_qdc[l][bar])                 
    
       #########
-      signal_sum = 0
-      hit_sum = 0       
-      for station in SFqdcStation:
-         signal_sum += SFqdcStation[station]
-         hit_sum += Nsf_hits[station]
-         if f"scifi_{station}_hits" not in file_info:
-            file_info[f"scifi_{station}_hits"] = [Nsf_hits[station]]    
-            file_info[f"scifi_{station}_qdc"] = [SFqdcStation[station]]
-         else:
-            file_info[f"scifi_{station}_hits"].append(Nsf_hits[station])  
-            file_info[f"scifi_{station}_qdc"].append(SFqdcStation[station])           
+        
       
       # Iwall_signal[Iwall].append(signal_sum)
       # print(N)
-      print(N, Iwall)
-      file_info["energy"].append(run_energy(options.runNumber))
-      file_info["event"].append(N)
-      file_info["wall"].append(Iwall)
-      file_info["scifi_signal"].append(signal_sum)
-      file_info["scifi_hit"].append(hit_sum)
       file_info["us_signal"].append(signal_us_sum)
       file_info["us_hit"].append(hit_us_sum)
       file_info["ds_vert_signal"].append(Nds_qdc[0])
@@ -1907,10 +2061,12 @@ def gen_events_scifi(Nev_st, Nev_en, save = True):
       file_info["notsat_sipms"].append(num_of_sipms_not_sat)
    if save:
       pickle.dump(file_info, f) # serialize the list
+   if condor:
+      pd.DataFrame(file_info).to_csv("output.csv")
    print(good, "number of events")
    signal_relation_digi_hists(signal_hit_scifi, file_info, 300)
    signal_hit_scifi_out = np.array(signal_hit_scifi["signal_scifi_hit"])
-   print(signal_hit_scifi_out[signal_hit_scifi_out<0].size/signal_hit_scifi_out.size)
+   #print(signal_hit_scifi_out[signal_hit_scifi_out<0].size/signal_hit_scifi_out.size)
    #print(file_info)
 
 
@@ -2159,22 +2315,23 @@ title = "august"
 label = "pion 300 GeV"
 # title = "pion_august_2023_after_all_sipm_cut_onehit_us_offset-7-QDC_off"
 # title = "muon_H8"
-# title = "pion_august_2023_after_all_sipm_cut_onehit_scifi_antitag"
+title = "pion_august_2023_after_all_sipm_cut_onehit_scifi_antitag"
 MIP_study(Nev_st = options.Nstart,
    Nev_en = options.Nstart + options.nEvents, 
+   list_of_events_key = False,
    title = title,
    label_0 = label,
    conv_mech = "dir",
    offset = 0.,
    side_bar_key = False,
-   mc = False,
+   mc = True,
    muon = False,
    small_count = True,
    large_count = True,
    fill_sipm_key = False,
    write_data = False)
 
-# gen_events_scifi(options.Nstart, options.Nstart + options.nEvents, save = True)
+#gen_events_scifi(options.Nstart, options.Nstart + options.nEvents, save = True, condor = False)
 
 # Mufi_hitMaps(100000)
 # smallVsLargeSiPMs(1000000)
